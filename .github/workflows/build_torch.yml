@@ -1,0 +1,57 @@
+name: Build tapas_torch.ko (GKI 5.15.220)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison flex libssl-dev libelf-dev dwarves python3 curl git tar xz-utils kmod binutils
+
+      - name: Download AOSP Clang 14.0.7 (clang-r450784e)
+        run: |
+          mkdir -p clang
+          curl -fsSL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-release/clang-r450784e.tar.gz" | tar -xz -C clang
+          ./clang/bin/clang --version
+
+      - name: Clone AOSP GKI android13-5.15 kernel
+        run: |
+          git clone --depth=1 -b android13-5.15 https://android.googlesource.com/kernel/common kernel
+
+      - name: Configure kernel & inject Module.symvers
+        run: |
+          export PATH="$PWD/clang/bin:$PATH"
+          cp device_defconfig kernel/.config
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 220/' kernel/Makefile
+          cd kernel
+          ./scripts/config --set-str CONFIG_LOCALVERSION "-g0401960bd8e9"
+          ./scripts/config --disable CONFIG_LOCALVERSION_AUTO
+          MAKE_ARGS="ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip"
+          make $MAKE_ARGS olddefconfig
+          make $MAKE_ARGS -j$(nproc) modules_prepare
+          cp ../full_symvers.txt Module.symvers
+
+      - name: Build tapas_torch.ko
+        run: |
+          export PATH="$PWD/clang/bin:$PATH"
+          MAKE_ARGS="ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip"
+          make -C kernel $MAKE_ARGS M="$PWD" modules
+          modinfo tapas_torch.ko | grep -E 'filename|vermagic|depends'
+          SZ=$(readelf -sW tapas_torch.ko | awk '/ __this_module$/ {print $3; exit}')
+          echo "__this_module size: $SZ"
+          test "$SZ" -eq 960
+
+      - name: Upload tapas_torch.ko
+        uses: actions/upload-artifact@v4
+        with:
+          name: tapas-torch-ko
+          path: tapas_torch.ko
