@@ -16,9 +16,10 @@ static int __kprobes torch_pre_handler(struct kprobe *p, struct pt_regs *regs)
 	unsigned int val = (unsigned int)regs->regs[1];
 
 	if (val > 0) {
-		u32 cur = val >> 2; /* 1..255 -> 0..63 (0x00..0x3F, safe KTD2691 torch range) */
-		if (cur > 0x3f)
-			cur = 0x3f;
+		u32 cur = val >> 1; /* 1..255 -> 0..127 (all 128 hardware KTD2691 steps) */
+		if (cur > 0x7f)
+			cur = 0x7f;
+		p_flash_init_array[1] = 0x02; /* keep torch ON during init -> zero blink */
 		p_flash_open_array[1] = cur;
 		p_flash_init_array[9] = cur;
 		if (*p_led_flash_state != (int)val)
@@ -85,8 +86,10 @@ static void __exit tapas_torch_exit(void)
 	unregister_kprobe(&kp_torch);
 	if (p_flash_open_array)
 		p_flash_open_array[1] = orig_open_cur;
-	if (p_flash_init_array)
+	if (p_flash_init_array) {
+		p_flash_init_array[1] = 0x00;
 		p_flash_init_array[9] = orig_init_cur;
+	}
 	pr_info("tapas_torch: unloaded, restored stock brightness 0x%x\n", orig_open_cur);
 }
 
